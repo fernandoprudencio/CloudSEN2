@@ -127,8 +127,8 @@ dataset_creator <- function(cloudsen2_row,
     ee$List$getInfo() %>%
     unlist -> cloud_percentage
 
-  lowest_position <- which.min(abs(cloud_percentage))
-  ideal_position <- which.min(abs(cloud_percentage - cloudsen2_row$potential_probability))
+  lowest_position <- which.min(abs(cloud_percentage)) - 1
+  ideal_position <- which.min(abs(cloud_percentage - cloudsen2_row$potential_probability)) - 1
   to_dowload <- c(lowest_position, ideal_position)
 
   # Create a folder

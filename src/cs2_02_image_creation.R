@@ -8,6 +8,7 @@
 
 library(tidyverse)
 library(mapview)
+library(grid)
 library(mapedit)
 library(raster)
 library(scales)
@@ -20,13 +21,22 @@ library(sp)
 set.seed(101)
 source("src/utils.R")
 
-ee_Initialize("csaybar", gcs = TRUE)
+ee_Initialize("csaybar")
 
 # Load potential points
 local_cloudsen2_points <- read_sf("data/cloudsen2.geojson") %>% arrange(type)
 create_potential_prob <- get_prob_by_class(local_cloudsen2_points) # potential points
 local_cloudsen2_points$potential_probability <-  create_potential_prob
 
-cloudsen2_row <- local_cloudsen2_points[20,]
-dataset_creator(cloudsen2_row)
+for (index in 1:1000) {
+  print(index)
+  cloudsen2_row <- local_cloudsen2_points[index,]
+  dataset_creator(
+    cloudsen2_row = cloudsen2_row,
+    bands = "B.*|probability",
+    kernel_size = c(255, 255),
+    data_range = c("2015-01-01", "2016-12-31"),
+    output = "results/"
+  )
+}
 
