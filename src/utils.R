@@ -103,6 +103,17 @@ dataset_creator <- function(cloudsen2_row,
     ee$ImageCollection$filterBounds(point) %>%
     ee$ImageCollection$filterDate(data_range[1], data_range[2])
 
+  # Create buffer
+  crs_kernel <- s2Sr$first()$select(0)$projection()$getInfo()$crs
+  new_point <- st_transform(cloudsen2_row$geometry, crs_kernel)
+  s2cloud_kernel <- st_buffer(new_point, dist = kernel_size[1]*10,endCapStyle = "SQUARE")
+  ee_kernel <- s2cloud_kernel %>% sf_as_ee(proj = crs_kernel)
+
+  # Create a S2 ImageCollection filtering by space and time.
+  s2Sr <- ee$ImageCollection("COPERNICUS/S2") %>%
+    ee$ImageCollection$filterBounds(point) %>%
+    ee$ImageCollection$filterDate(data_range[1], data_range[2])
+
   # Create a S2_CLOUD_PROBABILITY ImageCollection filtering by space and time.
   s2Clouds <- ee$ImageCollection('COPERNICUS/S2_CLOUD_PROBABILITY') %>%
     ee$ImageCollection$filterBounds(point)%>%
@@ -118,7 +129,7 @@ dataset_creator <- function(cloudsen2_row,
   ) %>% ee$ImageCollection() %>% ee$ImageCollection$map(add_S2cloud)
 
   # Create a function to estimate the mean cloud propability
-  cloud_prob_fn <- cloud_fun_creator(point = point, kernel = 2555)
+  cloud_prob_fn <- cloud_fun_creator(ee_kernel)
 
   # Apply 'cloud_fun_creator' to s2SrWithCloudMask
   s2SrWithCloudMask %>%
@@ -127,170 +138,221 @@ dataset_creator <- function(cloudsen2_row,
     ee$List$getInfo() %>%
     unlist -> cloud_percentage
 
-  lowest_position <- which.min(abs(cloud_percentage)) - 1
-  ideal_position <- which.min(abs(cloud_percentage - cloudsen2_row$potential_probability)) - 1
-  to_dowload <- c(lowest_position, ideal_position)
+  # Identify the image with the cloud coverage closer to the desire cloud percentage
+  if (!all(cloud_percentage == 0)) {
+    cloud_percentage[cloud_percentage == 0] <- -999
+  }
+  ideal_position <- which.min(abs(cloud_percentage - cloudsen2_row$potential_probability))[1]
 
-  # Create a folder
+  # Get Image ID
   s2_chip_id <- ee_get(s2SrWithCloudMask, ideal_position)$first()$
     get("system:id")$getInfo() %>% basename()
+
+  # Create a folder to save resutls
   dir_id <- sprintf("%s/%s",output, s2_chip_id)
   dir.create(dir_id, showWarnings = FALSE)
-  folder_names <- c("reference", "target")
 
-  for (index in seq_along(to_dowload)) {
-    # Select an Image considering a position
-    s2_img_data <- ee_get(s2SrWithCloudMask, to_dowload[index]) %>%
-      ee$ImageCollection$first()
+  # Select an image considering a position
+  s2_img_data <- ee_get(s2SrWithCloudMask, ideal_position - 1) %>%
+    ee$ImageCollection$first()
 
-    # Retrieve data
-    s2_img_array <- s2_img_data %>%
-      ee$Image$select(bands) %>%
-      ee$Image$addBands(ee$Algorithms$Sentinel2$CDI(s2_img_data)) %>%
-      ee$Image$addBands(ee$Image$pixelLonLat()) %>%
-      ee$Image$reproject(crs = "EPSG:4326", scale = 10) %>%
-      ee$Image$neighborhoodToArray(
-        kernel = ee$Kernel$rectangle(kernel_size[1], kernel_size[2], "pixels")
-      ) %>%
-      ee$Image$sampleRegions(ee$FeatureCollection(point)) %>%
-      ee$FeatureCollection$getInfo()
+  ## Create a REF image
+  ## it helps us to understand better the context of the chip
+  s2_ref <- s2_img_data$
+    select(c("B4","B3","B2"))$
+    #reproject(crs = "EPSG:4326", scale = 50)$
+    toInt()
 
-    # Convert data from list to data_frame
-    s2_chip_id <- basename(s2_img_data$get("system:id")$getInfo())
-    message("Processing image: ", s2_chip_id)
-    band_names <- names(s2_img_array$features[[1]]$properties)
-    extract_fn <- function(x) as.numeric(unlist(s2_img_array$features[[1]]$properties[x]))
-    image_as_df <- do.call(cbind,lapply(band_names, extract_fn))
-    colnames(image_as_df) <- band_names
-    image_as_tibble <- as_tibble(image_as_df)
+  ref <- ee_as_raster(
+    image = s2_ref,
+    scale = 100,
+    via = "drive"
+  )
+  ref[ref==0] = NA
 
-    # Convert data from data_frame to stack
-    coordinates(image_as_tibble) <- ~longitude+latitude
-    sf_to_stack <- function(x) rasterFromXYZ(image_as_tibble[x])
-    final_stack <- stack(lapply(names(image_as_tibble), sf_to_stack))
-    crs(final_stack) <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
-    names(final_stack) <- band_names[!band_names %in% c("latitude", "longitude")]
-    final_stack <- final_stack/10000
-    final_stack[["cdi"]] <- final_stack[["cdi"]]*10000
-    final_stack[["probability"]] <- final_stack[["probability"]]*10000
+  # Obtain metadata (% cloud, zenith)
+  s2_ref_cloud <- cloud_percentage[ideal_position]
+  s2_ref_zenith_angle <- s2_img_data$get("MEAN_SOLAR_ZENITH_ANGLE")$getInfo()
+  title <- sprintf("Cloud:%s, Zenith:%s",
+                   round(s2_ref_cloud,2),
+                   round(s2_ref_zenith_angle,2))
+  message(title)
+  # Save the REF image (static)
+  kroi <- ee_as_sf(point$buffer(10*256)$bounds())$geometry %>%
+    st_cast("MULTILINESTRING")
 
-    # Create a folder
-    dir_id_f <- sprintf("%s/%s",dir_id, folder_names[index])
-    dir.create(dir_id_f, showWarnings = FALSE)
+  png(sprintf("%s/ref_RGB.png", dir_id), 800, 600)
+  plotRGB(ref/1000*255)
+  plot(st_cast(s2cloud_kernel, "LINESTRING"), lwd=0.4, col = "red", add = TRUE,
+       lty=2)
+  dev.off()
 
-    # Create and save a mapview object
-    if (index == 2) {
-      r_aux <- mapview(
-        x = final_stack[[c("B10", "cdi", "probability")]],
-        map = cleanRmap@map,
-        layer.name = c("cirrus", "cdi", "cloud_prob")
-      )
-    } else {
-      r_aux <- mapview(
-        x = final_stack[[c("B10", "cdi", "probability")]],
-        layer.name = c("cirrus", "cdi", "cloud_prob")
-      )
-    }
+  # Save the REF image (interactive)
+  Rmap <- viewRGB(
+    x = ref[[c(3,2,1)]],
+    quantiles = c(0, 1),
+    na.color = "#BEBEBE00",
+    layer.name = sprintf("Reference_%s",title)
+  )
 
-    Rmap <- viewRGB(
-      x = final_stack[[c(5,6,7)]],
-      map =  r_aux@map,
-      quantiles = c(0, 1),
-      layer.name = sprintf("RGB_%s", folder_names[index])
-    )
+  ## Create a TARGET image
+  # Select an Image considering a position
+  s2_img_data <- ee_get(s2SrWithCloudMask, ideal_position - 1) %>%
+    ee$ImageCollection$first()
 
-    if (index == 1) {
-      cleanRmap <- viewRGB(
-        x = final_stack[[c(5,6,7)]],
-        quantiles = c(0, 1),
-        layer.name = sprintf("RGB_%s", folder_names[index])
-      )
-    }
-    mapshot(Rmap, url = sprintf("%s/map.html",normalizePath(dir_id_f)))
+  # Retrieve data only on the kernel (511x511)
+  s2_img_array <- s2_img_data %>%
+    ee$Image$select(bands) %>%
+    ee$Image$addBands(ee$Algorithms$Sentinel2$CDI(s2_img_data)) %>%
+    ee$Image$addBands(ee$Image$pixelLonLat()) %>%
+    ee$Image$reproject(crs = "EPSG:4326", scale = 10) %>%
+    ee$Image$neighborhoodToArray(
+      kernel = ee$Kernel$rectangle(kernel_size[1], kernel_size[2], "pixels")
+    ) %>%
+    ee$Image$sampleRegions(ee$FeatureCollection(point)) %>%
+    ee$FeatureCollection$getInfo()
 
-    # RGB -REAL COLOR
-    cloudsen2_plot(final_stack[[c("B4","B3","B2")]], sprintf("%s/RGB.png",dir_id_f))
+  # Convert data from list to data_frame
+  message("Processing image: ", s2_chip_id)
+  band_names <- names(s2_img_array$features[[1]]$properties)
+  extract_fn <- function(x) as.numeric(unlist(s2_img_array$features[[1]]$properties[x]))
+  image_as_df <- do.call(cbind,lapply(band_names, extract_fn))
+  colnames(image_as_df) <- band_names
+  image_as_tibble <- as_tibble(image_as_df)
 
-    # NRG - FALSE COLOR
-    cloudsen2_plot(final_stack[[c("B8","B4","B3")]], sprintf("%s/NRG.png",dir_id_f))
+  # Convert data from data_frame to stack
+  coordinates(image_as_tibble) <- ~longitude+latitude
+  sf_to_stack <- function(x) rasterFromXYZ(image_as_tibble[x])
+  final_stack <- stack(lapply(names(image_as_tibble), sf_to_stack))
+  crs(final_stack) <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+  names(final_stack) <- band_names[!band_names %in% c("latitude", "longitude")]
+  final_stack <- final_stack/10000
+  final_stack[["cdi"]] <- final_stack[["cdi"]]*10000
+  final_stack[["probability"]] <- final_stack[["probability"]]*10000
 
-    # NDVI
-    final_stack_ndvi <- (final_stack[["B8"]] - final_stack[["B4"]])/(final_stack[["B8"]] + final_stack[["B4"]])
-    cloudsen2_plot(
-      cloud_brick = final_stack_ndvi,
-      linStretchVec = FALSE,
-      output = sprintf("%s/NDVI.png",dir_id_f),
-      pal = viridis_pal(100),
-      limits = c(-0.1, 0.4)
-    )
+  rmap_target <- viewRGB(
+    x = final_stack[[c(5,6,7)]],
+    map =  Rmap@map,
+    quantiles = c(0, 1),
+    layer.name = "target_RGB"
+  )
 
-    # NDSI
-    final_stack_ndsi <- (final_stack[["B3"]] - final_stack[["B11"]])/(final_stack[["B3"]] + final_stack[["B11"]])
-    cloudsen2_plot(
-      cloud_brick = final_stack_ndsi,
-      output = sprintf("%s/NDSI.png",dir_id_f),
-      linStretchVec = FALSE,
-      pal = viridis_pal(100),
-      limits = c(0.4, 1)
-    )
+  # B10
+  rmap2_target <- mapview(
+    x = final_stack[[c("B10")]],
+    map =  rmap_target@map,
+    quantiles = c(0, 1),
+    layer.name = "B10"
+  )
 
-    # CDI
-    cdi <- final_stack[["cdi"]]
-    cloudsen2_plot(
-      cloud_brick = cdi,
-      output = sprintf("%s/CDI.png",dir_id_f),
-      linStretchVec = FALSE,
-      pal = viridis_pal(100),
-      limits = c(-1, -0.4)
-    )
+  # CDI
+  rmap3_target <- mapview(
+    x = final_stack[[c("cdi")]],
+    map =  rmap2_target@map,
+    quantiles = c(0, 1),
+    layer.name = "CDI"
+  )
 
-    # CIRRUS
-    cirrus <- final_stack[["B10"]]
-    cloudsen2_plot(
-      cloud_brick = cirrus,
-      output = sprintf("%s/CIRRUS.png",dir_id_f),
-      linStretchVec = FALSE,
-      pal = viridis_pal(100),
-      limits = c(0.005, 0.01)
-    )
+  # cloud probability
+  rmap4_target <- mapview(
+    x = final_stack[[c("probability")]],
+    map =  rmap3_target@map,
+    quantiles = c(0, 1),
+    layer.name = "probability"
+  )
 
-    # POTENTIAL CLOUD
-    pcloud <- final_stack[["probability"]]/100
-    cloudsen2_plot(
-      cloud_brick = pcloud,
-      output = sprintf("%s/pcloud.png",dir_id_f),
-      linStretchVec = FALSE,
-      pal = viridis_pal(100),
-      limits = c(0.4, 1)
-    )
+  mapshot(rmap4_target, url = sprintf("%s/map.html",normalizePath(dir_id)))
+  unlink(sprintf("%s/map_files",normalizePath(dir_id)), recursive = TRUE)
 
-    # Target
-    target <- pcloud > 0.7
-    cloudsen2_plot(
-      cloud_brick = target,
-      output = sprintf("%s/01_s2cloudless_TARGET.png",dir_id_f),
-      linStretchVec = FALSE,
-      pal = c("#00FF00","#FFB000"),
-      limits = c(0, 1)
-    )
-    cloudsen2_plot(
-      cloud_brick = target,
-      output = sprintf("%s/01_manual_TARGET.png",dir_id_f),
-      linStretchVec = FALSE,
-      pal = c("#00FF00","#FFB000"),
-      limits = c(0, 1)
-    )
+  # RGB -REAL COLOR
+  cloudsen2_plot(final_stack[[c("B4","B3","B2")]], sprintf("%s/RGB.png",dir_id))
 
-    tile_center <- cloudsen2_row$geometry[[1]]
-    tibble(
-      landcover = cloudsen2_row$type,
-      source = s2_chip_id,
-      tile_center_x = tile_center[1],
-      tile_center_y = tile_center[2],
-      avg_cloud_percentage = mean(getValues(pcloud))
-    ) -> chip_metadata
-    write_csv(chip_metadata, sprintf("%s/metadata.csv",dir_id_f))
-  }
+  # NRG - FALSE COLOR
+  cloudsen2_plot(final_stack[[c("B8","B4","B3")]], sprintf("%s/NRG.png",dir_id))
+
+  # NDVI
+  final_stack_ndvi <- (final_stack[["B8"]] - final_stack[["B4"]])/(final_stack[["B8"]] + final_stack[["B4"]])
+  cloudsen2_plot(
+    cloud_brick = final_stack_ndvi,
+    linStretchVec = FALSE,
+    output = sprintf("%s/NDVI.png",dir_id),
+    pal = viridis_pal(100),
+    limits = c(-0.1, 0.4)
+  )
+
+  # NDSI
+  final_stack_ndsi <- (final_stack[["B3"]] - final_stack[["B11"]])/(final_stack[["B3"]] + final_stack[["B11"]])
+  cloudsen2_plot(
+    cloud_brick = final_stack_ndsi,
+    output = sprintf("%s/NDSI.png",dir_id),
+    linStretchVec = FALSE,
+    pal = viridis_pal(100),
+    limits = c(0.4, 1)
+  )
+
+  # CDI
+  cdi <- final_stack[["cdi"]]
+  cloudsen2_plot(
+    cloud_brick = cdi,
+    output = sprintf("%s/CDI.png", dir_id),
+    linStretchVec = FALSE,
+    pal = viridis_pal(100),
+    limits = c(-1, -0.4)
+  )
+
+  # CIRRUS
+  cirrus <- final_stack[["B10"]]
+  cloudsen2_plot(
+    cloud_brick = cirrus,
+    output = sprintf("%s/CIRRUS.png",dir_id),
+    linStretchVec = FALSE,
+    pal = viridis_pal(100),
+    limits = c(0.005, 0.01)
+  )
+
+  # POTENTIAL CLOUD
+  pcloud <- final_stack[["probability"]]/100
+  cloudsen2_plot(
+    cloud_brick = pcloud,
+    output = sprintf("%s/pcloud.png",dir_id),
+    linStretchVec = FALSE,
+    pal = viridis_pal(100),
+    limits = c(0.4, 1)
+  )
+
+  # Target
+  target <- pcloud > 0.7
+  cloudsen2_plot(
+    cloud_brick = target,
+    output = sprintf("%s/01_s2cloudless_TARGET.png",dir_id),
+    linStretchVec = FALSE,
+    pal = c("#00FF00","#FFB000"),
+    limits = c(0, 1)
+  )
+  cloudsen2_plot(
+    cloud_brick = target,
+    output = sprintf("%s/01_manual_TARGET.png",dir_id),
+    linStretchVec = FALSE,
+    pal = c("#00FF00","#FFB000"),
+    limits = c(0, 1)
+  )
+
+  tile_center <- cloudsen2_row$geometry[[1]]
+
+  list(
+    bands = names(final_stack),
+    landcover = cloudsen2_row$type,
+    source = s2_chip_id,
+    tile_center_x = tile_center[1],
+    tile_center_y = tile_center[2],
+    avg_cloud_percentage = s2_ref_cloud,
+    mean_solar_zenith_angle = s2_ref_zenith_angle
+  ) -> chip_metadata
+  write_json(chip_metadata, path = sprintf("%s/metadata.json", dir_id))
+  writeRaster(final_stack, sprintf("%s/image.tif",dir_id))
+  new_dir_id <- sprintf("%s/CC_%s_%s", output, round(s2_ref_cloud,2), s2_chip_id)
+  file.rename(dir_id, new_dir_id)
+  invisible(TRUE)
 }
 
 add_S2cloud <- function(img) {
@@ -370,13 +432,25 @@ gen_rcloudpoints <- function(n) {
     runif(n = groups_n[5], min = 65, max = 100)) # cloudy
 }
 
-cloud_fun_creator <- function(img, point, kernel = 2555) {
+cloud_fun_creator <- function(roi,
+                              cloud_threshold = 40,
+                              convolution_kernel_radius = 4,
+                              dilatation_kernel_radius = 8) {
   function(img) {
-    ee_rect_kernel <- point$buffer(kernel)$bounds()
-    cloud_prob <- img$select("probability")
-    cprob <- cloud_prob$reduceRegion(
+    boxcar1 <- ee$Kernel$square(radius = convolution_kernel_radius,
+                                units = 'pixels',
+                                normalize = TRUE)
+    boxcar2 <- ee$Kernel$square(radius = dilatation_kernel_radius,
+                                units = 'pixels',
+                                normalize = TRUE)
+    cloud_prob <- img$select("probability")$
+      convolve(boxcar1)$
+      focal_max(kernel = boxcar2, iterations = 1)$
+      gt(cloud_threshold)
+    new_img <- img$select("probability")$updateMask(cloud_prob)$unmask(0)
+    cprob <- new_img$reduceRegion(
       reducer = ee$Reducer$mean(),
-      geometry = ee_rect_kernel
+      geometry = roi
     )
     img$set(list(cprob = cprob$get("probability")))
   }
@@ -431,3 +505,20 @@ map2color <- function(x,pal,limits=NULL) {
 inferno_pal <- function (n) {grDevices::hcl.colors(n, palette = "Inferno")}
 viridis_pal <- function (n) {grDevices::hcl.colors(n, palette = "viridis")}
 
+
+dilation_cloud <- function(img,
+                           cloud_threshold = 40,
+                           convolution_kernel_radius = 4,
+                           dilatation_kernel_radius = 8) {
+  boxcar1 <- ee$Kernel$square(radius = convolution_kernel_radius,
+                              units = 'pixels',
+                              normalize = TRUE)
+  boxcar2 <- ee$Kernel$square(radius = dilatation_kernel_radius,
+                              units = 'pixels',
+                              normalize = TRUE)
+  cloud_prob <- img$select("probability")$
+    convolve(boxcar1)$
+    focal_max(kernel = boxcar2, iterations = 1)$
+    gt(cloud_threshold)
+  cloud_prob
+}

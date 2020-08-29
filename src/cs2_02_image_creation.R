@@ -7,12 +7,13 @@
 #'
 
 library(tidyverse)
+library(jsonlite)
 library(mapview)
-library(grid)
 library(mapedit)
 library(raster)
 library(scales)
 library(stars)
+library(grid)
 library(rgee)
 library(png)
 library(sf)
@@ -28,8 +29,8 @@ local_cloudsen2_points <- read_sf("data/cloudsen2.geojson") %>% arrange(type)
 create_potential_prob <- get_prob_by_class(local_cloudsen2_points) # potential points
 local_cloudsen2_points$potential_probability <-  create_potential_prob
 
+# index <- 15
 for (index in 1:1000) {
-  print(index)
   cloudsen2_row <- local_cloudsen2_points[index,]
   dataset_creator(
     cloudsen2_row = cloudsen2_row,
