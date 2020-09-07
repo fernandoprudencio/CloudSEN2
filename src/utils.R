@@ -573,15 +573,24 @@ dataset_creator_chips <- function(cloudsen2_row,
   unlink(sprintf("%s/map_files",normalizePath(dir_id)), recursive = TRUE)
 
   # RGB -REAL COLOR
-  cloudsen2_plot(final_stack[[c("B4","B3","B2")]], sprintf("%s/RGB.png",dir_id))
+  cloudsen2_plot(
+    cloud_brick = final_stack[[c("B4","B3","B2")]],
+    output = sprintf("%s/RGB.png",dir_id),
+    expect_dim = c(511, 511)
+  )
 
   # NRG - FALSE COLOR
-  cloudsen2_plot(final_stack[[c("B8","B4","B3")]], sprintf("%s/NRG.png",dir_id))
+  cloudsen2_plot(
+    cloud_brick = final_stack[[c("B8","B4","B3")]],
+    output = sprintf("%s/NRG.png",dir_id),
+    expect_dim = c(511, 511)
+  )
 
   # NDVI
   final_stack_ndvi <- (final_stack[["B8"]] - final_stack[["B4"]])/(final_stack[["B8"]] + final_stack[["B4"]])
   cloudsen2_plot(
     cloud_brick = final_stack_ndvi,
+    expect_dim = c(511, 511),
     linStretchVec = FALSE,
     output = sprintf("%s/NDVI.png",dir_id),
     pal = viridis_pal(100),
@@ -592,6 +601,7 @@ dataset_creator_chips <- function(cloudsen2_row,
   final_stack_ndsi <- (final_stack[["B3"]] - final_stack[["B11"]])/(final_stack[["B3"]] + final_stack[["B11"]])
   cloudsen2_plot(
     cloud_brick = final_stack_ndsi,
+    expect_dim = c(511, 511),
     output = sprintf("%s/NDSI.png",dir_id),
     linStretchVec = FALSE,
     pal = viridis_pal(100),
@@ -603,6 +613,7 @@ dataset_creator_chips <- function(cloudsen2_row,
   cloudsen2_plot(
     cloud_brick = cdi,
     output = sprintf("%s/CDI.png", dir_id),
+    expect_dim = c(511, 511),
     linStretchVec = FALSE,
     pal = viridis_pal(100),
     limits = c(-1, -0.4)
@@ -613,6 +624,7 @@ dataset_creator_chips <- function(cloudsen2_row,
   cloudsen2_plot(
     cloud_brick = cirrus,
     output = sprintf("%s/CIRRUS.png",dir_id),
+    expect_dim = c(511, 511),
     linStretchVec = FALSE,
     pal = viridis_pal(100),
     limits = c(0.005, 0.01)
@@ -623,6 +635,7 @@ dataset_creator_chips <- function(cloudsen2_row,
   cloudsen2_plot(
     cloud_brick = pcloud,
     output = sprintf("%s/s2cloudness_prob.png",dir_id),
+    expect_dim = c(511, 511),
     linStretchVec = FALSE,
     pal = viridis_pal(100),
     limits = c(0.4, 1)
@@ -632,6 +645,7 @@ dataset_creator_chips <- function(cloudsen2_row,
   cloudsen2_plot(
     cloud_brick = final_stack[["sen2cor_mask"]],
     output = sprintf("%s/sen2cor_mask.png",dir_id),
+    expect_dim = c(511, 511),
     linStretchVec = FALSE,
     pal = c("#007B00","#00FFFF", "#7D7D7D"),
     limits = c(0, 2)
@@ -639,6 +653,7 @@ dataset_creator_chips <- function(cloudsen2_row,
   cloudsen2_plot(
     cloud_brick = final_stack[["s2cloudness_mask"]],
     output = sprintf("%s/s2cloudness_mask.png",dir_id),
+    expect_dim = c(511, 511),
     linStretchVec = FALSE,
     pal = c("#007B00","#00FFFF"),
     limits = c(0, 1)
