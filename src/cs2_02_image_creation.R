@@ -29,15 +29,14 @@ local_cloudsen2_points <- read_sf("data/cloudsen2.geojson") %>% arrange(type)
 create_potential_prob <- get_prob_by_class(local_cloudsen2_points) # potential points
 local_cloudsen2_points$potential_probability <-  create_potential_prob
 
-# index <- 15
+# index <- 30
 for (index in 1:1000) {
   cloudsen2_row <- local_cloudsen2_points[index,]
-  dataset_creator(
+  dataset_creator_chips(
     cloudsen2_row = cloudsen2_row,
-    bands = "B.*|probability",
+    bands = "B.*|probability|SCL",
     kernel_size = c(255, 255),
-    data_range = c("2015-01-01", "2016-12-31"),
+    data_range = c("2019-01-01", "2020-07-31"),
     output = "results/"
   )
 }
-
