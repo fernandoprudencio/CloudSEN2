@@ -694,45 +694,50 @@ add_S2cloud2 <- function(img) {
 
 # Determine the potential cloud probability desired
 get_prob_by_class <- function(local_cloudsen2_points) {
+  colnames <- sprintf("pcloud_%02d",1:5)
   pbaren_cloud <- local_cloudsen2_points %>% filter(value == 1) %>% nrow()
-  baren_td <- gen_rcloudpoints(pbaren_cloud)
+  baren_td <- gen_rcloudpoints(pbaren_cloud)  %>%
+    `colnames<-`(colnames)
 
   pgrass_cloud <- local_cloudsen2_points %>% filter(value == 2) %>% nrow()
-  grass_td <- gen_rcloudpoints(pgrass_cloud)
+  grass_td <- gen_rcloudpoints(pgrass_cloud)  %>%
+    `colnames<-`(colnames)
 
   pshrubland_cloud <- local_cloudsen2_points %>% filter(value == 3) %>% nrow()
-  shrubland_td <- gen_rcloudpoints(pshrubland_cloud)
+  shrubland_td <- gen_rcloudpoints(pshrubland_cloud)  %>%
+    `colnames<-`(colnames)
 
   psnow_cloud <- local_cloudsen2_points %>% filter(value == 4) %>% nrow()
-  snow_td <- gen_rcloudpoints(psnow_cloud)
+  snow_td <- gen_rcloudpoints(psnow_cloud)  %>%
+    `colnames<-`(colnames)
 
   ptmforest_cloud <- local_cloudsen2_points %>% filter(value == 5) %>% nrow()
-  tmforest_td <- gen_rcloudpoints(ptmforest_cloud)
+  tmforest_td <- gen_rcloudpoints(ptmforest_cloud)  %>%
+    `colnames<-`(colnames)
 
   ptrforest_cloud <- local_cloudsen2_points %>% filter(value == 6) %>% nrow()
-  trforest_td <- gen_rcloudpoints(ptrforest_cloud)
+  trforest_td <- gen_rcloudpoints(ptrforest_cloud)  %>%
+    `colnames<-`(colnames)
 
   purban_cloud <- local_cloudsen2_points %>% filter(value == 7) %>% nrow()
-  urban_td <- gen_rcloudpoints(purban_cloud)
+  urban_td <- gen_rcloudpoints(purban_cloud)  %>%
+    `colnames<-`(colnames)
 
   pwater_cloud <- local_cloudsen2_points %>% filter(value == 8) %>% nrow()
-  water_td <- gen_rcloudpoints(pwater_cloud)
+  water_td <- gen_rcloudpoints(pwater_cloud)  %>%
+    `colnames<-`(colnames)
 
   pwetlands_cloud <- local_cloudsen2_points %>% filter(value == 9) %>% nrow()
-  wetlands_td <- gen_rcloudpoints(pwetlands_cloud)
+  wetlands_td <- gen_rcloudpoints(pwetlands_cloud)  %>%
+    `colnames<-`(colnames)
 
-  c(
-    baren_prob = baren_td,
-    grass_prob = grass_td,
-    shrubland_prob = shrubland_td,
-    snow_prob = snow_td,
-    tmforest_prob = tmforest_td,
-    trforest_prob = trforest_td,
-    urban_prob = urban_td,
-    water_prob = water_td,
-    wetlands_prob = wetlands_td
-  )
+  complete_pprob <- rbind(baren_td,grass_td, shrubland_td, snow_td, tmforest_td,
+                          trforest_td, urban_td, water_td, wetlands_td)
 
+  cloudsen2_type <- local_cloudsen2_points$type
+  cloudsen2_value <- local_cloudsen2_points$value
+  fn_dataset <- cbind(id = seq_along(cloudsen2_value), type = cloudsen2_type, value = cloudsen2_value, complete_pprob)
+  st_sf(fn_dataset, geometry = local_cloudsen2_points$geometry)
   # list(
   #   baren_prob = baren_td,
   #   grass_prob = grass_td,
@@ -748,17 +753,27 @@ get_prob_by_class <- function(local_cloudsen2_points) {
 
 # Cloud probability (range of interest) to pick up images
 gen_rcloudpoints <- function(n) {
-  groups_n <- floor(c(0.05,0.3,0.3,0.3,0.05)*n)
-  if (sum(groups_n) != n) {
-    difff <- n - sum(groups_n)
-    random_add <- sample(5,1)
-    groups_n[random_add] <- groups_n[random_add] + difff
+  # groups_n <- floor(c(0.05,0.3,0.3,0.3,0.05)*n)
+  cloud_ppoints <- list()
+  for (index in seq_len(n)) {
+    groups_n <- rep(1, 5)
+    # if (sum(groups_n) != n) {
+    #   difff <- n - sum(groups_n)
+    #   random_add <- sample(5,1)
+    #   groups_n[random_add] <- groups_n[random_add] + difff
+    # }
+    cloud_ppoints[[index]] <- c(
+      runif(n = groups_n[1], min = 0, max = 10),  # clear
+      runif(n = groups_n[2], min = 10, max = 25), # almost clear
+      runif(n = groups_n[3], min = 25, max = 45), # low-cloudy
+      runif(n = groups_n[4], min = 45, max = 65), # mid-cloudy
+      runif(n = groups_n[5], min = 65, max = 100)) # cloudy
   }
-  c(runif(n = groups_n[1], min = 0, max = 10),
-    runif(n = groups_n[2], min = 10, max = 20), # almost clear
-    runif(n = groups_n[3], min = 20, max = 35), # low-cloudy
-    runif(n = groups_n[4], min = 35, max = 50), # mid-cloudy
-    runif(n = groups_n[5], min = 50, max = 100)) # cloudy
+  cloud_ppoints %>%
+    as.data.frame() %>%
+    `colnames<-`(NULL) %>%
+    t %>%
+    as.data.frame()
 }
 
 cloud_fun_creator_s2cloudness <- function(scale,
@@ -915,3 +930,86 @@ inferno_pal <- function (n) {grDevices::hcl.colors(n, palette = "Inferno")}
 viridis_pal <- function (n) {grDevices::hcl.colors(n, palette = "viridis")}
 
 
+select_dataset_thumbnail_creator <- function(cloudsen2_row,
+                                             n_images = 50,
+                                             kernel_size = c(255, 255),
+                                             data_range = c("2019-01-01", "2020-07-31"),
+                                             output = "results/") {
+  # 1. Create a point which represent the center of the chip
+  point <- ee$Geometry$Point(cloudsen2_row$geometry[[1]])
+
+  # 2. Create a S2 ImageCollection with all the necessary images.
+  s2Sr <- ee$ImageCollection("COPERNICUS/S2_SR") %>%
+    ee$ImageCollection$filterBounds(point) %>%
+    ee$ImageCollection$filterDate(data_range[1], data_range[2])
+
+  # 3. Create a S2 ImageCollection with all the necessary images.
+  img_crs <- s2Sr$first()$select(0)$projection()$getInfo()[["crs"]]
+
+  # 4. Donwload the images
+  images_available <- s2Sr$size()$getInfo()
+  if (images_available < n_images) {
+    n_images <- images_available
+  }
+  images_position <- sample(images_available, n_images)
+
+  # 4. Create folders to save results
+  dir_id <- sprintf("%s/point_%04d",output, cloudsen2_row$id)
+  dir.create(dir_id, showWarnings = FALSE)
+  n_images <- seq_along(images_position)
+
+  for (r_index in seq_along(images_position)) {
+    # 4.1 Select the image to download
+    img_to_download <- ee_get(s2Sr, images_position[r_index] - 1)$first()
+    img_id <- img_to_download$id()$getInfo()
+    s2_img_array <- img_to_download %>%
+      ee$Image$select(c("B4", "B3", "B2")) %>%
+      ee$Image$addBands(ee$Image$pixelCoordinates(projection = img_crs)) %>%
+      # ee$Image$reproject(crs = img_crs, scale = 10) %>%
+      ee$Image$neighborhoodToArray(
+        kernel = ee$Kernel$rectangle(kernel_size[1], kernel_size[2], "pixels")
+      ) %>%
+      ee$Image$sampleRegions(ee$FeatureCollection(point),
+                             projection = img_crs,
+                             scale = 10) %>%
+      ee$FeatureCollection$getInfo()
+
+    # Convert data from list to data_frame
+    message(
+      sprintf("Processing point [%s] image [%s] ... please wait",
+              cloudsen2_row$id, r_index)
+    )
+    band_names <- names(s2_img_array$features[[1]]$properties)
+    extract_fn <- function(x) as.numeric(unlist(s2_img_array$features[[1]]$properties[x]))
+    image_as_df <- do.call(cbind,lapply(band_names, extract_fn))
+    colnames(image_as_df) <- band_names
+    image_as_tibble <- as_tibble(image_as_df)
+    coordinates(image_as_tibble) <- ~x+y
+    sf_to_stack <- function(x) rasterFromXYZ(image_as_tibble[x])
+    final_stack <- stack(lapply(names(image_as_tibble), sf_to_stack))
+    crs(final_stack) <- st_crs(img_crs)$proj4string
+    png(sprintf("%s/%s.png", dir_id, img_id), 1000, 1000)
+    max_value <- max(maxValue(final_stack))
+    plotRGB(final_stack/max_value, r = 3, g = 2, b = 1, scale = 1)
+    dev.off()
+  }
+
+  # Apologize my messy code! :3
+  xy <- cloudsen2_row[["geometry"]][[1]] %>% as.numeric()
+  x <- xy[1]
+  y <- xy[2]
+  st_geometry(cloudsen2_row) <- NULL
+  list_w_data <- cloudsen2_row %>%
+    dplyr::select(starts_with("pcloud")) %>%
+    as.list()
+  names(list_w_data) <- sprintf("PUT_HERE_ID_%02d", 1:5)
+  list_w_data$x <- x
+  list_w_data$y <- y
+  list_w_data$comments <- "PUT_HERE_YOUR_COMMENT"
+  jsonlite::write_json(
+      x = list_w_data,
+      path = sprintf("%s/cprob_%04d.json", dir_id, cloudsen2_row$id),
+      pretty = TRUE,
+      auto_unbox = TRUE
+  )
+}
