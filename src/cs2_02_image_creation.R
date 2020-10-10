@@ -31,7 +31,7 @@ local_cloudsen2_points <- read_sf("data/cloudsen2.geojson") %>%
   arrange(type) %>%
   get_prob_by_class() # potential points
 
-for (index in 147:200) {
+for (index in 153:200) {
   cloudsen2_row <- local_cloudsen2_points[index,]
   select_dataset_thumbnail_creator(
     cloudsen2_row = cloudsen2_row,
