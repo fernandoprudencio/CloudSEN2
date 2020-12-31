@@ -39,12 +39,24 @@ sapply(
 library(sf)
 library(raster)
 library(sen2r)
+<<<<<<< HEAD
 
 #' LOAD VECTOR DATA
 sf.area <- st_read(
   dsn = "data/vector/gpkg/study_area.gpkg",
   layer = "study_area_GEOWGS84", quiet = T, as_tibble = T
 )
+=======
+library(mapedit)
+library(tidyverse)
+
+#' LOAD VECTOR DATA
+# sf.area <- st_read(
+#   dsn = "data/vector/gpkg/study_area.gpkg",
+#   layer = "study_area_GEOWGS84", quiet = T, as_tibble = T
+# )
+sf.area <- mapedit::drawFeatures()
+>>>>>>> 5418484cba5f9896ee2f14f191ebb2475128b6b1
 
 #' TIME PERIOD
 ts <- as.Date(c("2020-01-01", "2020-09-15"))
@@ -62,10 +74,18 @@ safe_getMetadata(data, "sensing_datetime")
 
 #' DOWNLOAD SENTINEL DATASET
 date()
+<<<<<<< HEAD
 s2_download(data[22], outdir = "data/raster/")
+=======
+s2_download(data[19], outdir = "data/raster/")
+>>>>>>> 5418484cba5f9896ee2f14f191ebb2475128b6b1
 date()
 
 #' TIME OF DOWNLOADING
 #'   start time: Thu Sep 24 13:51:53 202
 #'   end time: Thu Sep 24 14:11:33 2020
+<<<<<<< HEAD
 #'   time lapse: 20min to 17.1 Mbps
+=======
+#'   time lapse: 20min to 17.1 Mbps
+>>>>>>> 5418484cba5f9896ee2f14f191ebb2475128b6b1
